@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+
+import os
+import zmq
+import time
+
+NOTIFY_PORT = 6060
+
+context = zmq.Context()
+socket = context.socket(zmq.PUB)
+socket.bind("tcp://10.0.0.2:%d" % NOTIFY_PORT)
+time.sleep(1) # avoid sending messages before connection is ready.
+   
+socket.send_string("notify:test")

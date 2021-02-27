@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+
+import os
+#import pwd
+#import grp
+#import spwd
+
+
+
+BASE_DIR = "/etc"
+BASE_DIR = "/home/dhyams/tiny-accountsync/examples/etc" # for debugging
+BASE_DIR = "C:\\src\\tiny-accountsync\\examples\\etc" # for debugging
+
+# users below 1004 are admins.  Don't bother these.  What this means is that brent
+# and daniel will have to have user-logins, and not reuse these.  In the future,
+# we will change dhyams to dhyamsadm and brent to brentadm.
+MIN_UID = 1004
+MIN_GID = 1004
+
+MASTER_NODE = "login-node"
+
+
+
+def get_pwfile():
+    return os.path.join(BASE_DIR, "passwd")
+
+def get_groupfile():
+    return os.path.join(BASE_DIR, "group")
+
+def get_shadowfile():
+    return os.path.join(BASE_DIR, "shadow")
+
+def get_content(pwfile, groupfile, shadowfile):
+
+    def name(line):
+        return line.split(':')[0]
+
+    def uidorgid(line):
+        return int(line.split(':')[2])
+
+    def pwhash(line):
+        return line.split(':')[1]
+
+    with open(pwfile, 'r') as fp:
+        pwcontent = {name(x) : x for x in fp if uidorgid(x) >= MIN_UID and uidorgid(x) != 65534}
+
+    # read in the group file without any filtering.
+    # 
+    with open(groupfile, 'r') as fp:
+        grpcontent = {name(x) : x for x in fp if uidorgid(x) >= MIN_GID and uidorgid(x) != 65534}
+
+    # read in the shadow file, filtering out all irrelevant userids
+    with open(shadowfile, 'r') as fp:
+        shadowcontent = {name(x): x for x in fp if name(x) in pwcontent and len(pwhash(x)) > 1}
+
+    print("PWCONTENT")
+    print(pwcontent)
+    
+    print("GRPCONTENT")
+    print(grpcontent)
+
+    print("SHADOWCONTENT")
+    print(shadowcontent)
+
+    return pwcontent, grpcontent, shadowcontent
+
+    
+
+def process():
+
+    
+
+    # pull shadow, passwd, and group from the login-node.
+    for fname in "passwd group shadow".split():
+        cmd = f"scp {MASTER_NODE}:/etc/{fname} /tmp/{fname}.{MASTER_NODE}"
+     
+    get_content(get_pwfile(), get_groupfile(), get_shadowfile())
+
+    # iterate through the machines that we want to eventually push to, and pull shadow, passwd,
+    # and group from them [storage-node, management-node:/nfsroot]
+
+    # for storage-node
+        # replace/add entries in passwd (entries with uid >= MIN_UID)
+
+        # replace/add entries in group (entries with guid >= MIN_GUID)
+
+        # replace/add entries in shadow (users corresponding to entries with uid >= MIN_UID)
+
+    # for management-node/nfsroot
+        # do the same.
+
+    # every push needs a backup command first!!
+    # push files from storage-node back to storage-node
+
+    # push files from management-node/nfsroot back to nfsroot
+    # push files from management-node/nfsroot to c[1-14]: use pdcp!
+
+  
+
+if __name__ == "__main__":
+  
+    process()

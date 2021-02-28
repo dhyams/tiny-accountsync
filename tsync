@@ -6,20 +6,14 @@ import pwd
 import grp
 import spwd
 
-
+# zeromq port to listen for notifications
 NOTIFY_PORT = 6060
-
-BASE_DIR = "/etc"
-BASE_DIR = "/home/dhyams/tiny-accountsync/examples/etc" # for debugging
-BASE_DIR = "C:\\src\\tiny-accountsync\\examples\\etc" # for debugging
 
 # users below 1004 are admins.  Don't bother these.  What this means is that brent
 # and daniel will have to have user-logins, and not reuse these.  In the future,
 # we will change dhyams to dhyamsadm and brent to brentadm.
 MIN_UID = 1004
 MIN_GID = 1004
-
-MASTER_NODE = "login-node"
 
 
 def setup_zmq():
@@ -31,76 +25,153 @@ def setup_zmq():
     return socket
  
 
-def get_pwfile():
-    return os.path.join(BASE_DIR, "passwd")
+def ugname(line):
+    return line.split(':')[0]
 
-def get_groupfile():
-    return os.path.join(BASE_DIR, "group")
+def uidorgid(line):
+    return int(line.split(':')[2])
 
-def get_shadowfile():
-    return os.path.join(BASE_DIR, "shadow")
+def is_regularuid(uid):
+    return uid >= MIN_UID and uid != 65534
 
-def get_content(pwfile, groupfile, shadowfile):
+def is_regulargid(uid):
+    return uid >= MIN_GID and uid != 65534
 
-    def name(line):
-        return line.split(':')[0]
+def pwhash(line):
+    return line.split(':')[1]
 
-    def uidorgid(line):
-        return int(line.split(':')[2])
-
-    def pwhash(line):
-        return line.split(':')[1]
+def get_reference_content(pwfile, groupfile, shadowfile):
 
     with open(pwfile, 'r') as fp:
-        pwcontent = {name(x) : x for x in fp if uidorgid(x) >= MIN_UID and uidorgid(x) != 65534}
+        pwcontent = {ugname(x) : x for x in fp if is_regularuid(uidorgid(x))}
 
     # read in the group file without any filtering.
     # 
     with open(groupfile, 'r') as fp:
-        grpcontent = {name(x) : x for x in fp if uidorgid(x) >= MIN_GID and uidorgid(x) != 65534}
+        grpcontent = {ugname(x) : x for x in fp if is_regulargid(uidorgid(x))}
 
     # read in the shadow file, filtering out all irrelevant userids
     with open(shadowfile, 'r') as fp:
-        shadowcontent = {name(x): x for x in fp if name(x) in pwcontent and len(pwhash(x)) > 1}
-
-    print("PWCONTENT")
-    print(pwcontent)
-    
-    print("GRPCONTENT")
-    print(grpcontent)
-
-    print("SHADOWCONTENT")
-    print(shadowcontent)
+        shadowcontent = {ugname(x): x for x in fp if ugname(x) in pwcontent and len(pwhash(x)) > 1}
 
     return pwcontent, grpcontent, shadowcontent
 
-    
+
+def system(cmd):
+    print("EXECUTING: "+cmd)
+    return os.system(cmd)
+
+
+def pull(location, suffix):
+    acctfiles = "passwd group shadow".split()
+    filemap = {}
+    for fname in acctfiles: 
+        filemap[fname] = f"/tmp/{fname}.{suffix}"
+        cmd = f"rm -f {filemap[fname]}"
+        system(cmd)
+        cmd = f"scp {location}{fname} {filemap[fname]}"
+        system(cmd)
+
+    return filemap
+     
+
+def updatepwg(ref, oldfile, kind, isgood):
+
+    newfile = oldfile + ".new"
+
+    oldnames = []
+    purgednames = []
+    newnames = []
+
+    with open(oldfile, "r") as fp:
+        with open(newfile, "w") as fpw:
+           # in-place replacement of existing users/groups
+           for line in fp:
+              uid = uidorgid(line) 
+              name = ugname(line) 
+              oldnames.append(name)
+              if isgood(uid) and name not in ref:
+                  print(f"Warning: {kind} {name}/{uid} in {oldfile} but not present on login-node. PURGING. ")
+                  purgednames.append(name)
+              else:
+                  fpw.write(ref.get("name", line))
+           # append any new users/groups
+           for name in ref:
+              if name not in oldnames:
+                 print(f"Adding new {kind} %s/%d to %s"%(name,uid,newfile))
+                 newnames.append(name)
+                 fpw.write(ref[name])
+
+    return newfile,newnames,purgednames
+
+
+def updateshadow(shadowref, oldfile, newusers, purgedusers):
+    newfile = oldfile + ".new"
+
+    oldnames = []
+
+    with open(oldfile, "r") as fp:
+        with open(newfile, "w") as fpw:
+           for line in fp:
+              name = ugname(line)
+              oldnames.append(name)
+              if name in purgedusers:
+                  print(f"Warning: {name} in {oldfile} but not present on login-node. PURGING. ")
+              else:
+                  fpw.write(shadowref.get("name", line))
+           for name in newusers:
+               if name not in shadowref:
+                   print(f"Error: {name} was a newly added user but has no shadow entry.")
+               else:
+                   print(f"Adding new username {name} to shadow.")
+                   fpw.write(shadowref[name])
+
+    return newfile
+
+
+
 
 def process():
 
-    print("PROCESSING")
-    return
+    #return # safety hatch
 
-    # pull shadow, passwd, and group from the login-node.
-    for fname in "passwd group shadow".split():
-        cmd = f"scp {MASTER_NODE}:/etc/{fname} /tmp/{fname}.{MASTER_NODE}"
+    # pull from the login node
+    reference_files = pull(f"login-node:/etc/", "login-node")
+
+    # check to see if the appropriate files exist. 
      
-    get_content(get_pwfile(), get_groupfile(), get_shadowfile())
+    pw, grp, shadow = get_reference_content(reference_files["passwd"], reference_files["group"], reference_files["shadow"])
 
     # iterate through the machines that we want to eventually push to, and pull shadow, passwd,
     # and group from them [storage-node, management-node:/nfsroot]
 
-    # for storage-node
-        # replace/add entries in passwd (entries with uid >= MIN_UID)
+    ###########################
+    # storage node
+    ###########################
+    old_sn_files = pull("storage-node:/etc/", "sn")
 
-        # replace/add entries in group (entries with guid >= MIN_GUID)
+    newpwfile, newusers, purgedusers = updatepwg(pw, old_sn_files["passwd"],"username", is_regularuid) 
+    newgrpfile, newgrps, purgedgrps = updatepwg(grp, old_sn_files["group"], "group", is_regulargid)
+    newshadowfile = updateshadow(shadow, old_sn_files["shadow"], newusers, purgedusers)
 
-        # replace/add entries in shadow (users corresponding to entries with uid >= MIN_UID)
+    new_storage_node_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile }
 
-    # for management-node/nfsroot
-        # do the same.
 
+    ###########################
+    # nfsroot 
+    ###########################
+    old_nfsroot_files = pull("management-node:/nfsroot/etc/", "nfsroot")
+
+    newpwfile, newusers, purgedusers = updatepwg(pw, old_nfsroot_files["passwd"],"username", is_regularuid) 
+    newgrpfile, newgrps, purgedgrps = updatepwg(grp, old_nfsroot_files["group"], "group", is_regulargid)
+    newshadowfile = updateshadow(shadow, old_nfsroot_files["shadow"], newusers, purgedusers)
+
+    new_nfsroot_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile }
+            
+
+    # TODO
     # every push needs a backup command first!!
+    # maybe execute a git add then commit?
     # push files from storage-node back to storage-node
 
     # push files from management-node/nfsroot back to nfsroot
@@ -109,10 +180,12 @@ def process():
   
 
 if __name__ == "__main__":
-      
-    socket = setup_zmq()
- 
-    while True:
-        notify = socket.recv_string()
-        print(notify)
-        process()
+    
+    if 0:
+        socket = setup_zmq()
+        while True:
+            notify = socket.recv_string()
+            print(notify)
+            process()
+    else:
+         process()

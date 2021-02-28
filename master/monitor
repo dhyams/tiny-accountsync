@@ -1,0 +1,3 @@
+#!/bin/sh 
+
+ls /etc/passwd /etc/group /etc/shadow | entr -p /etc/tsync/notify_acct_change

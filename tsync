@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import os
-#import pwd
-#import grp
-#import spwd
+import zmq
+import pwd
+import grp
+import spwd
 
 
+NOTIFY_PORT = 6060
 
 BASE_DIR = "/etc"
 BASE_DIR = "/home/dhyams/tiny-accountsync/examples/etc" # for debugging
@@ -20,6 +22,14 @@ MIN_GID = 1004
 MASTER_NODE = "login-node"
 
 
+def setup_zmq():
+    global socket
+    context = zmq.Context()
+    socket = context.socket(zmq.SUB)
+    socket.connect("tcp://10.0.0.2:%d" % NOTIFY_PORT)
+    socket.subscribe("")
+    return socket
+ 
 
 def get_pwfile():
     return os.path.join(BASE_DIR, "passwd")
@@ -68,7 +78,8 @@ def get_content(pwfile, groupfile, shadowfile):
 
 def process():
 
-    
+    print("PROCESSING")
+    return
 
     # pull shadow, passwd, and group from the login-node.
     for fname in "passwd group shadow".split():
@@ -98,5 +109,10 @@ def process():
   
 
 if __name__ == "__main__":
-  
-    process()
+      
+    socket = setup_zmq()
+ 
+    while True:
+        notify = socket.recv_string()
+        print(notify)
+        process()

@@ -51,6 +51,89 @@ class AccountInfo:
        with open(gshadowfile, 'r') as fp:
            self.gshadow = {ugname(x): x for x in fp if ugname(x) in self.grp}
 
+class FileSet:
+    def __init__(self, dct):
+       with open(dct["passwd"], 'r') as fp:
+           self.pw = [x for x in fp if x.strip()]
+
+       with open(dct["shadow"], 'r') as fp:
+           self.shadow = [x for x in fp if x.strip()]
+
+       with open(dct["group"], 'r') as fp:
+           self.grp = [x for x in fp if x.strip()]
+
+       with open(dct["gshadow"], 'r') as fp:
+           self.gshadow = [x for x in fp if x.strip()]
+
+    def validate(self):
+         if not self.check_filesizes():
+             return False
+
+         if not self.check_for_known_users():
+             return False
+
+         if not self.check_for_known_groups():
+             return False
+
+         #if not self.check_for_sudo_users():
+         #    return False
+
+         return True
+
+    def check_for_known_users(self):
+
+         knowns = "root daemon bin man nobody syslog ntp sys sshd dhyams brent tsandlin slurm".split()
+
+         for filesource in [self.pw, self.shadow]:
+            users = [ugname(x) for x in filesource] 
+            for k in knowns:
+                if k not in users:
+                    print("required username %s not in password or shadow files"%k)
+                    return False
+
+         return True
+
+    def check_for_known_groups(self):
+
+         knowns = "root sudo adm daemon bin man syslog ntp sys sshd dhyams brent tsandlin slurm vlock nogroup crontab".split()
+
+         for filesource in [self.grp, self.gshadow]:
+            users = [ugname(x) for x in filesource] 
+            for k in knowns:
+                if k not in users:
+                    print("required group %s not in group or gshadow files"%k)
+                    return False
+
+         return True
+
+    def check_filesizes(self):
+         if len(self.pw) != len(self.shadow):
+             print("Password file not the same length as shadow")
+             return False
+
+         if len(self.grp) != len(self.gshadow):
+             print("Group file not the same length as gshadow")
+             return False
+
+         if (len(self.pw) < 20):
+             print("passwd file too short.")
+             return False
+
+         if (len(self.shadow) < 20):
+             print("shadow file too short.")
+             return False
+
+         if (len(self.grp) < 20):
+             print("group file too short.")
+             return False
+
+         if (len(self.gshadow) < 20):
+             print("gshadow file too short.")
+             return False
+
+         return True
+
+
 
 
 def system(cmd):
@@ -126,6 +209,16 @@ def updateshadow(shadowref, oldfile, newusers, purgedusers):
     return newfile
 
 
+def check_fileset(fileset):
+    try:
+        fs = FileSet(fileset)
+        return fs.validate()
+
+    except:
+        import traceback
+        traceback.print_exc()
+        print("Unknown error in check_fileset")
+        return False
 
 
 def process():
@@ -156,6 +249,7 @@ def process():
     new_storage_node_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile, "gshadow": newgshadowfile }
 
 
+
     ###########################
     # nfsroot 
     ###########################
@@ -172,6 +266,9 @@ def process():
      
     # do sanity checks
 
+    if check_fileset(new_storage_node_files) and check_fileset(new_nfsroot_files):
+        # push
+        pass
 
     # TODO
     # every push needs a backup command first!!

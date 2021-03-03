@@ -2,9 +2,6 @@
 
 import os
 import zmq
-import pwd
-import grp
-import spwd
 
 # zeromq port to listen for notifications
 NOTIFY_PORT = 6060
@@ -40,21 +37,20 @@ def is_regulargid(uid):
 def pwhash(line):
     return line.split(':')[1]
 
-def get_reference_content(pwfile, groupfile, shadowfile):
+class AccountInfo:
+    def __init__(self, pwfile, shadowfile, groupfile, gshadowfile):
+       with open(pwfile, 'r') as fp:
+           self.pw = {ugname(x) : x for x in fp if is_regularuid(uidorgid(x))}
 
-    with open(pwfile, 'r') as fp:
-        pwcontent = {ugname(x) : x for x in fp if is_regularuid(uidorgid(x))}
+       with open(shadowfile, 'r') as fp:
+           self.shadow = {ugname(x): x for x in fp if ugname(x) in self.pw}
 
-    # read in the group file without any filtering.
-    # 
-    with open(groupfile, 'r') as fp:
-        grpcontent = {ugname(x) : x for x in fp if is_regulargid(uidorgid(x))}
+       with open(groupfile, 'r') as fp:
+           self.grp = {ugname(x) : x for x in fp if is_regulargid(uidorgid(x))}
 
-    # read in the shadow file, filtering out all irrelevant userids
-    with open(shadowfile, 'r') as fp:
-        shadowcontent = {ugname(x): x for x in fp if ugname(x) in pwcontent and len(pwhash(x)) > 1}
+       with open(gshadowfile, 'r') as fp:
+           self.gshadow = {ugname(x): x for x in fp if ugname(x) in self.grp}
 
-    return pwcontent, grpcontent, shadowcontent
 
 
 def system(cmd):
@@ -63,7 +59,7 @@ def system(cmd):
 
 
 def pull(location, suffix):
-    acctfiles = "passwd group shadow".split()
+    acctfiles = "passwd group shadow gshadow".split()
     filemap = {}
     for fname in acctfiles: 
         filemap[fname] = f"/tmp/{fname}.{suffix}"
@@ -98,6 +94,7 @@ def updatepwg(ref, oldfile, kind, isgood):
            # append any new users/groups
            for name in ref:
               if name not in oldnames:
+                 uid = uidorgid(ref[name])
                  print(f"Adding new {kind} %s/%d to %s"%(name,uid,newfile))
                  newnames.append(name)
                  fpw.write(ref[name])
@@ -135,12 +132,12 @@ def process():
 
     #return # safety hatch
 
-    # pull from the login node
-    reference_files = pull(f"login-node:/etc/", "login-node")
+    # pull from the login node.  This is the reference data.
+    ref = pull("login-node:/etc/", "login-node")
 
     # check to see if the appropriate files exist. 
      
-    pw, grp, shadow = get_reference_content(reference_files["passwd"], reference_files["group"], reference_files["shadow"])
+    acct = AccountInfo(ref["passwd"], ref["shadow"], ref["group"], ref["gshadow"])
 
     # iterate through the machines that we want to eventually push to, and pull shadow, passwd,
     # and group from them [storage-node, management-node:/nfsroot]
@@ -150,24 +147,31 @@ def process():
     ###########################
     old_sn_files = pull("storage-node:/etc/", "sn")
 
-    newpwfile, newusers, purgedusers = updatepwg(pw, old_sn_files["passwd"],"username", is_regularuid) 
-    newgrpfile, newgrps, purgedgrps = updatepwg(grp, old_sn_files["group"], "group", is_regulargid)
-    newshadowfile = updateshadow(shadow, old_sn_files["shadow"], newusers, purgedusers)
+    newpwfile, newusers, purgedusers = updatepwg(acct.pw, old_sn_files["passwd"],"username", is_regularuid) 
+    newshadowfile = updateshadow(acct.shadow, old_sn_files["shadow"], newusers, purgedusers)
 
-    new_storage_node_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile }
+    newgrpfile, newgrps, purgedgrps = updatepwg(acct.grp, old_sn_files["group"], "group", is_regulargid)
+    newgshadowfile = updateshadow(acct.gshadow, old_sn_files["gshadow"], newgrps, purgedgrps)
+
+    new_storage_node_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile, "gshadow": newgshadowfile }
 
 
     ###########################
     # nfsroot 
     ###########################
-    old_nfsroot_files = pull("management-node:/nfsroot/etc/", "nfsroot")
+    if 0:
+     old_nfsroot_files = pull("management-node:/nfsroot/etc/", "nfsroot")
 
-    newpwfile, newusers, purgedusers = updatepwg(pw, old_nfsroot_files["passwd"],"username", is_regularuid) 
-    newgrpfile, newgrps, purgedgrps = updatepwg(grp, old_nfsroot_files["group"], "group", is_regulargid)
-    newshadowfile = updateshadow(shadow, old_nfsroot_files["shadow"], newusers, purgedusers)
+     newpwfile, newusers, purgedusers = updatepwg(acct.pw, old_nfsroot_files["passwd"],"username", is_regularuid) 
+     newshadowfile = updateshadow(acct.shadow, old_nfsroot_files["shadow"], newusers, purgedusers)
 
-    new_nfsroot_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile }
-            
+     newgrpfile, newgrps, purgedgrps = updatepwg(acct.grp, old_nfsroot_files["group"], "group", is_regulargid)
+     newgshadowfile = updateshadow(acct.gshadow, old_nfsroot_files["gshadow"], newgrps, purgedgrps)
+
+     new_nfsroot_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile, "gshadow": newgshadowfile }
+     
+    # do sanity checks
+
 
     # TODO
     # every push needs a backup command first!!

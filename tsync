@@ -6,11 +6,8 @@ import zmq
 # zeromq port to listen for notifications
 NOTIFY_PORT = 6060
 
-# users below 1004 are admins.  Don't bother these.  What this means is that brent
-# and daniel will have to have user-logins, and not reuse these.  In the future,
-# we will change dhyams to dhyamsadm and brent to brentadm.
-MIN_UID = 1004
-MIN_GID = 1004
+MIN_UID = 1000
+MIN_GID = 1000
 
 
 def setup_zmq():
@@ -53,6 +50,8 @@ class AccountInfo:
 
 class FileSet:
     def __init__(self, dct):
+       self.dct = dct
+
        with open(dct["passwd"], 'r') as fp:
            self.pw = [x for x in fp if x.strip()]
 
@@ -66,6 +65,14 @@ class FileSet:
            self.gshadow = [x for x in fp if x.strip()]
 
     def validate(self):
+         print(f"Checking files: {self.dct['passwd']}")
+         print(f"Checking files: {self.dct['shadow']}")
+         print(f"Checking files: {self.dct['group']}")
+         print(f"Checking files: {self.dct['gshadow']}")
+
+         if not self.check_fileformats():
+             return False
+
          if not self.check_filesizes():
              return False
 
@@ -75,10 +82,31 @@ class FileSet:
          if not self.check_for_known_groups():
              return False
 
-         #if not self.check_for_sudo_users():
-         #    return False
+         if not self.check_for_sudo_users():
+             return False
 
          return True
+
+    def check_for_sudo_users():
+
+         # make sure that these users are in the sudo group
+         admins = "tsandlin dhyams brent".split()
+
+         # find the sudo line
+         for line in self.grp:
+              parts = line.split(':')
+              grpname = parts[0]
+              if grpname == "sudo":
+                  sudoers = parts[-1].split(',')
+                  for admin in admins:
+                      if admin not in sudoers:
+                          print(f"{admin} is not in the sudo group but should be") 
+                          return False
+
+
+
+         return True
+
 
     def check_for_known_users(self):
 
@@ -105,6 +133,42 @@ class FileSet:
                     return False
 
          return True
+
+    def check_fileformats(self):
+
+       if not self.check_fileformat(self.pw, 7, numerical_fields = [2,3]):
+           return False
+
+       if not self.check_fileformat(self.grp, 4, numerical_fields = [2]):
+           return False
+
+       if not self.check_fileformat(self.shadow, 9, numerical_fields = [2,3,4,5]):
+           return False
+
+       if not self.check_fileformat(self.gshadow, 4, numerical_fields = []):
+           return False
+
+
+    def check_fileformat(self, filesource, nfields, numerical_fields):
+
+        for line in filesource:
+            parts = line.split(':')
+            if len(parts) != nfields:
+                print(f"file does not have {nfields} fields: {line} {parts}")
+                return False
+            for f in numerical_fields:
+               try:
+                   int(parts[f])
+               except ValueError:
+                   print(f"Invalid UID or GID {line}")
+                   return False
+
+        return True
+
+
+
+
+
 
     def check_filesizes(self):
          if len(self.pw) != len(self.shadow):
@@ -253,16 +317,15 @@ def process():
     ###########################
     # nfsroot 
     ###########################
-    if 0:
-     old_nfsroot_files = pull("management-node:/nfsroot/etc/", "nfsroot")
+    old_nfsroot_files = pull("management-node:/nfsroot/etc/", "nfsroot")
 
-     newpwfile, newusers, purgedusers = updatepwg(acct.pw, old_nfsroot_files["passwd"],"username", is_regularuid) 
-     newshadowfile = updateshadow(acct.shadow, old_nfsroot_files["shadow"], newusers, purgedusers)
+    newpwfile, newusers, purgedusers = updatepwg(acct.pw, old_nfsroot_files["passwd"],"username", is_regularuid) 
+    newshadowfile = updateshadow(acct.shadow, old_nfsroot_files["shadow"], newusers, purgedusers)
 
-     newgrpfile, newgrps, purgedgrps = updatepwg(acct.grp, old_nfsroot_files["group"], "group", is_regulargid)
-     newgshadowfile = updateshadow(acct.gshadow, old_nfsroot_files["gshadow"], newgrps, purgedgrps)
+    newgrpfile, newgrps, purgedgrps = updatepwg(acct.grp, old_nfsroot_files["group"], "group", is_regulargid)
+    newgshadowfile = updateshadow(acct.gshadow, old_nfsroot_files["gshadow"], newgrps, purgedgrps)
 
-     new_nfsroot_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile, "gshadow": newgshadowfile }
+    new_nfsroot_files = { "passwd": newpwfile, "group": newgrpfile, "shadow": newshadowfile, "gshadow": newgshadowfile }
      
     # do sanity checks
 

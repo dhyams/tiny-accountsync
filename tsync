@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import zmq
+import logging
+import logging.handlers
 
 # zeromq port to listen for notifications
 NOTIFY_PORT = 6060
@@ -17,6 +20,42 @@ def setup_zmq():
     socket.connect("tcp://10.0.0.2:%d" % NOTIFY_PORT)
     socket.subscribe("")
     return socket
+
+
+# this is a helper function for setup_logging that causes all uncaught exceptions to
+# be logged.
+def log_exceptions(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        # sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        logging.info("Terminated by user keyboard interrupt.")
+        return
+
+    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+
+
+def setup_logging(rotate_log_size=4.0, rotate_log_count=10):
+
+    # automatically log uncaught exceptions.
+    sys.excepthook = log_exceptions
+
+    logfile = "/var/log/account-sync.log"
+
+    my_logger = logging.getLogger()
+    my_logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(process)d %(levelname)s: %(message)s")
+    handler = logging.handlers.RotatingFileHandler(
+        logfile, maxBytes=rotate_log_size * 1024 * 1024, backupCount=rotate_log_count,
+    )
+    handler.setFormatter(formatter)
+    my_logger.addHandler(handler)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    my_logger.addHandler(handler)
+
+
+
  
 
 def ugname(line):
@@ -65,10 +104,10 @@ class FileSet:
            self.gshadow = [x for x in fp if x.strip()]
 
     def validate(self):
-         print(f"Checking files: {self.dct['passwd']}")
-         print(f"Checking files: {self.dct['shadow']}")
-         print(f"Checking files: {self.dct['group']}")
-         print(f"Checking files: {self.dct['gshadow']}")
+         logging.info(f"Checking files: {self.dct['passwd']}")
+         logging.info(f"Checking files: {self.dct['shadow']}")
+         logging.info(f"Checking files: {self.dct['group']}")
+         logging.info(f"Checking files: {self.dct['gshadow']}")
 
          if not self.check_fileformats():
              return False
@@ -100,7 +139,7 @@ class FileSet:
                   sudoers = parts[-1].split(',')
                   for admin in admins:
                       if admin not in sudoers:
-                          print(f"{admin} is not in the sudo group but should be") 
+                          logging.error(f"{admin} is not in the sudo group but should be") 
                           return False
 
 
@@ -116,7 +155,7 @@ class FileSet:
             users = [ugname(x) for x in filesource] 
             for k in knowns:
                 if k not in users:
-                    print("required username %s not in password or shadow files"%k)
+                    logging.error("required username %s not in password or shadow files"%k)
                     return False
 
          return True
@@ -129,7 +168,7 @@ class FileSet:
             users = [ugname(x) for x in filesource] 
             for k in knowns:
                 if k not in users:
-                    print("required group %s not in group or gshadow files"%k)
+                    logging.error("required group %s not in group or gshadow files"%k)
                     return False
 
          return True
@@ -154,13 +193,13 @@ class FileSet:
         for line in filesource:
             parts = line.split(':')
             if len(parts) != nfields:
-                print(f"file does not have {nfields} fields: {line} {parts}")
+                logging.error(f"file does not have {nfields} fields: {line} {parts}")
                 return False
             for f in numerical_fields:
                try:
                    int(parts[f])
                except ValueError:
-                   print(f"Invalid UID or GID {line}")
+                   logging.error(f"Invalid UID or GID {line}")
                    return False
 
         return True
@@ -172,27 +211,27 @@ class FileSet:
 
     def check_filesizes(self):
          if len(self.pw) != len(self.shadow):
-             print("Password file not the same length as shadow")
+             logging.error("Password file not the same length as shadow")
              return False
 
          if len(self.grp) != len(self.gshadow):
-             print("Group file not the same length as gshadow")
+             logging.error("Group file not the same length as gshadow")
              return False
 
          if (len(self.pw) < 20):
-             print("passwd file too short.")
+             logging.error("passwd file too short.")
              return False
 
          if (len(self.shadow) < 20):
-             print("shadow file too short.")
+             logging.error("shadow file too short.")
              return False
 
          if (len(self.grp) < 20):
-             print("group file too short.")
+             logging.error("group file too short.")
              return False
 
          if (len(self.gshadow) < 20):
-             print("gshadow file too short.")
+             logging.error("gshadow file too short.")
              return False
 
          return True
@@ -201,7 +240,7 @@ class FileSet:
 
 
 def system(cmd):
-    print("EXECUTING: "+cmd)
+    logging.info("EXECUTING: "+cmd)
     return os.system(cmd)
 
 
@@ -234,7 +273,7 @@ def updatepwg(ref, oldfile, kind, isgood):
               name = ugname(line) 
               oldnames.append(name)
               if isgood(uid) and name not in ref:
-                  print(f"Warning: {kind} {name}/{uid} in {oldfile} but not present on login-node. PURGING. ")
+                  logging.info(f"Warning: {kind} {name}/{uid} in {oldfile} but not present on login-node. PURGING. ")
                   purgednames.append(name)
               else:
                   fpw.write(ref.get("name", line))
@@ -242,7 +281,7 @@ def updatepwg(ref, oldfile, kind, isgood):
            for name in ref:
               if name not in oldnames:
                  uid = uidorgid(ref[name])
-                 print(f"Adding new {kind} %s/%d to %s"%(name,uid,newfile))
+                 logging.info(f"Adding new {kind} %s/%d to %s"%(name,uid,newfile))
                  newnames.append(name)
                  fpw.write(ref[name])
 
@@ -260,14 +299,14 @@ def updateshadow(shadowref, oldfile, newusers, purgedusers):
               name = ugname(line)
               oldnames.append(name)
               if name in purgedusers:
-                  print(f"Warning: {name} in {oldfile} but not present on login-node. PURGING. ")
+                  logging.info(f"Warning: {name} in {oldfile} but not present on login-node. PURGING. ")
               else:
                   fpw.write(shadowref.get("name", line))
            for name in newusers:
                if name not in shadowref:
-                   print(f"Error: {name} was a newly added user but has no shadow entry.")
+                   logging.info(f"Error: {name} was a newly added user but has no shadow entry.")
                else:
-                   print(f"Adding new username {name} to shadow.")
+                   logging.info(f"Adding new username {name} to shadow.")
                    fpw.write(shadowref[name])
 
     return newfile
@@ -281,13 +320,13 @@ def check_fileset(fileset):
     except:
         import traceback
         traceback.print_exc()
-        print("Unknown error in check_fileset")
+        logging.error("Unknown error in check_fileset")
         return False
 
 
 def process():
 
-    #return # safety hatch
+    logging.info("****** beginning account sync *******")
 
     # pull from the login node.  This is the reference data.
     ref = pull("login-node:/etc/", "login-node")
@@ -344,12 +383,14 @@ def process():
   
 
 if __name__ == "__main__":
-    
+   
+    setup_logging()
+
     if 0:
         socket = setup_zmq()
         while True:
             notify = socket.recv_string()
-            print(notify)
+            logging.info("Received notification: " + notify)
             process()
     else:
          process()

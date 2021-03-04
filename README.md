@@ -4,4 +4,3 @@ Simple solution for synchronizing user/group information on a small Linux networ
 # Requires
 * Python 3
 * zmq
-* pyinotify
